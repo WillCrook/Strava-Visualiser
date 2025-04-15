@@ -112,10 +112,10 @@ if not gdf.empty:
 
     plt.axis('off')
     plt.tight_layout()
-    plt.savefig("uk_run_coverage.svg", dpi=300, format='svg')
+    plt.savefig("uk_run_coverage.png", dpi=300, format='png')
 
     # Check if the image file is saved
-    if os.path.exists("uk_run_coverage.svg"):
+    if os.path.exists("uk_run_coverage.png"):
         print("Plot saved successfully as 'uk_run_coverage.svg'.")
     else:
         print("Failed to save the plot.")
