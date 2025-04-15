@@ -14,10 +14,6 @@ uk = world[world['ADMIN'] == 'United Kingdom'].to_crs(epsg=27700)
 # Parse all GPX runs from folder
 folder = './Strava Data/activities'
 runs = []
-
-# Parse all GPX runs from folder
-folder = './Strava Data/activities'
-runs = []
 valid_files = 0
 
 for file in os.listdir(folder):
@@ -78,17 +74,23 @@ if len(runs) > 0:
 else:
     print("No GPS points were extracted. Check your GPX files.")
 
-# If GeoDataFrame has data, proceed with buffering and plotting
+# If GeoDataFrame has data, proceed with filtering, buffering and plotting
 if not gdf.empty:
-    print("Proceeding with buffering and plot...")  # Debugging line
-    buffered = gdf.buffer(20)
+    print("Proceeding with filtering, buffering and plot...")
+    
+    # Filter points to only include those within the UK
+    uk_geom = uk.geometry.iloc[0]
+    gdf['in_uk'] = gdf.intersects(uk_geom)
+    uk_gdf = gdf[gdf['in_uk']]
+    
+    print(f"Total points: {len(gdf)}")
+    print(f"Points in UK: {len(uk_gdf)}")
+    
+    # Now only buffer the UK points
+    buffered = uk_gdf.buffer(20)
 
     # Check if buffered geometries are valid
     print(f"Buffered geometries valid: {all(buffer.is_valid for buffer in buffered)}")
-
-    # Check if any buffered geometries intersect with the UK
-    intersects_uk = [buffer.intersects(uk.geometry.iloc[0]) for buffer in buffered]
-    print(f"Geometries that intersect the UK: {sum(intersects_uk)} / {len(buffered)}")
 
     covered_union = buffered.union_all()  # Create a single geometry from all buffered areas
     uk_area = uk.geometry.area.iloc[0]
@@ -100,7 +102,7 @@ if not gdf.empty:
     # Plot and save as PNG
     fig, ax = plt.subplots(figsize=(10, 12))
     uk.plot(ax=ax, color='lightgrey', edgecolor='black')
-    gdf.plot(ax=ax, color='blue', linewidth=1)
+    uk_gdf.plot(ax=ax, color='blue', linewidth=1)  # Only plot UK points
     gpd.GeoSeries(covered_union).plot(ax=ax, color='red', alpha=0.3)
 
     # Add text
