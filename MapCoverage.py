@@ -102,7 +102,7 @@ if not gdf.empty:
     # Plot and save as PNG
     fig, ax = plt.subplots(figsize=(10, 12))
     uk.plot(ax=ax, color='lightgrey', edgecolor='black')
-    uk_gdf.plot(ax=ax, color='blue', linewidth=1)  # Only plot UK points
+    uk_gdf.plot(ax=ax, color='red', linewidth=1)  # Only plot UK points
     gpd.GeoSeries(covered_union).plot(ax=ax, color='red', alpha=0.3)
 
     # Add text
@@ -112,11 +112,11 @@ if not gdf.empty:
 
     plt.axis('off')
     plt.tight_layout()
-    plt.savefig("uk_run_coverage.png", dpi=300, format='png')
+    plt.savefig("uk_run_coverage.png", dpi=600, format='png')
 
     # Check if the image file is saved
     if os.path.exists("uk_run_coverage.png"):
-        print("Plot saved successfully as 'uk_run_coverage.svg'.")
+        print("Plot saved successfully as 'uk_run_coverage.png'.")
     else:
         print("Failed to save the plot.")
 else:
