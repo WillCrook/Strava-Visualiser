@@ -2,19 +2,52 @@ import os, gzip
 import gpxpy
 import geopandas as gpd
 import matplotlib.pyplot as plt
-from shapely.geometry import LineString, Point
+from shapely.geometry import Point, Polygon, box
 from fitparse import FitFile
+import matplotlib as mpl
+import contextily as ctx
 
+# Configure matplotlib for better output
+mpl.rcParams['path.simplify'] = True
+mpl.rcParams['path.simplify_threshold'] = 0.0001
 
-# Load UK shapefile
+# Load world shapefile
 world = gpd.read_file("ne_10m_admin_0_countries/ne_10m_admin_0_countries.shp")
-uk = world[world['ADMIN'] == 'United Kingdom'].to_crs(epsg=27700)
+uk = world[world['ADMIN'] == 'United Kingdom']
 
+# Function to get region GeoDataFrame
+def get_region_gdf(region_name):
+    if region_name == 'UK':
+        return uk.to_crs(epsg=27700)
+    elif region_name == 'Sheffield':
+        # Create a proper polygon for Sheffield
+        sheffield_bbox = box(-1.55, 53.32, -1.35, 53.48)
+        sheffield_poly = gpd.GeoDataFrame(
+            geometry=[sheffield_bbox], 
+            crs="EPSG:4326"
+        ).to_crs(epsg=27700)
+        return sheffield_poly
+    elif region_name == 'Buckinghamshire':
+        # Create a proper polygon for Buckinghamshire
+        bucks_bbox = box(-1.02, 51.48, -0.47, 52.08)
+        bucks_poly = gpd.GeoDataFrame(
+            geometry=[bucks_bbox], 
+            crs="EPSG:4326"
+        ).to_crs(epsg=27700)
+        return bucks_poly
+    elif region_name == 'World':
+        # Simplify world geometry to improve performance
+        simplified_world = world.copy()
+        simplified_world['geometry'] = simplified_world['geometry'].simplify(0.1)
+        return simplified_world
 
 # Parse all GPX runs from folder
 folder = './Strava Data/activities'
 runs = []
 valid_files = 0
+
+# Sample points (reduce file size)
+sample_rate = 5  # Keep every 5th point
 
 for file in os.listdir(folder):
     path = os.path.join(folder, file)
@@ -32,7 +65,12 @@ for file in os.listdir(folder):
             with gzip.open(path, 'rb') as f:
                 fitfile = FitFile(f)
                 points = []
+                point_count = 0
                 for record in fitfile.get_messages('record'):
+                    point_count += 1
+                    if point_count % sample_rate != 0:
+                        continue
+                    
                     lat = None
                     lon = None
                     for data in record:
@@ -53,71 +91,142 @@ for file in os.listdir(folder):
         continue  # skip non-supported files
 
     file_has_points = False
+    point_count = 0
+    
     for track in gpx.tracks:
         for segment in track.segments:
             if segment.points:
                 file_has_points = True
                 for point in segment.points:
+                    point_count += 1
+                    if point_count % sample_rate != 0:
+                        continue
                     runs.append(Point(point.longitude, point.latitude))
     if file_has_points:
         valid_files += 1
 
 print(f"Valid activities parsed: {valid_files}")
-
-# Ensure runs list is populated
 print(f"Number of GPS points extracted: {len(runs)}")
 
-# Convert to GeoDataFrame and reproject
+# Convert to GeoDataFrame
 if len(runs) > 0:
-    gdf = gpd.GeoDataFrame(geometry=runs, crs='EPSG:4326').to_crs(epsg=27700)
+    gdf = gpd.GeoDataFrame(geometry=runs, crs='EPSG:4326')
     print("GeoDataFrame created successfully.")
 else:
     print("No GPS points were extracted. Check your GPX files.")
+    exit()
 
-# If GeoDataFrame has data, proceed with filtering, buffering and plotting
-if not gdf.empty:
-    print("Proceeding with filtering, buffering and plot...")
+# Define a list of regions to process
+regions = ['World', 'UK', 'Sheffield', 'Buckinghamshire']
+
+for region_name in regions:
+    print(f"\nProcessing {region_name} view...")
     
-    # Filter points to only include those within the UK
-    uk_geom = uk.geometry.iloc[0]
-    gdf['in_uk'] = gdf.intersects(uk_geom)
-    uk_gdf = gdf[gdf['in_uk']]
+    # Get the region geometry
+    region_gdf = get_region_gdf(region_name)
     
-    print(f"Total points: {len(gdf)}")
-    print(f"Points in UK: {len(uk_gdf)}")
+    # Reproject the region to match the GPS points CRS if needed
+    if region_name == 'World':
+        gdf_for_region = gdf.copy()  # Keep in WGS84 for world map
+        buffer_distance = 0.02  # About 2km at equator
+    else:
+        # For UK and local regions, use British National Grid
+        gdf_for_region = gdf.to_crs(epsg=27700)
+        buffer_distance = 100 if region_name == 'UK' else 50  # Meters
     
-    # Now only buffer the UK points
-    buffered = uk_gdf.buffer(20)
-
-    # Check if buffered geometries are valid
-    print(f"Buffered geometries valid: {all(buffer.is_valid for buffer in buffered)}")
-
-    covered_union = buffered.union_all()  # Create a single geometry from all buffered areas
-    uk_area = uk.geometry.area.iloc[0]
-    covered_area = covered_union.area
-    percent = (covered_area / uk_area) * 100
-
-    print(f"Coverage Percentage: {percent:.4f}%")
-
-    # Plot and save as PNG
-    fig, ax = plt.subplots(figsize=(10, 12))
-    uk.plot(ax=ax, color='lightgrey', edgecolor='black')
-    uk_gdf.plot(ax=ax, color='red', linewidth=1)  # Only plot UK points
-    gpd.GeoSeries(covered_union).plot(ax=ax, color='red', alpha=0.3)
-
-    # Add text
-    plt.title("UK Running Coverage Map", fontsize=16)
-    plt.text(0.05, 0.05, f"UK covered: {percent:.4f}%", transform=ax.transAxes,
-             fontsize=12, bbox=dict(facecolor='white', alpha=0.7))
-
+    # Filter points to only include those within the selected region
+    if region_name == 'World':
+        # For world, we'll keep all points
+        region_gdf_filtered = gdf_for_region
+    else:
+        # Get the region geometry
+        region_geom = region_gdf.geometry.iloc[0]
+        
+        # Filter points within the region
+        region_gdf_filtered = gpd.sjoin(
+            gdf_for_region, 
+            region_gdf, 
+            how="inner", 
+            predicate="within"
+        )
+        
+        if region_gdf_filtered.empty:
+            print(f"No points found within {region_name}. Trying with intersects instead...")
+            # Fallback to intersects if within returns empty
+            region_gdf_filtered = gpd.sjoin(
+                gdf_for_region, 
+                region_gdf, 
+                how="inner", 
+                predicate="intersects"
+            )
+    
+    print(f"Points in {region_name}: {len(region_gdf_filtered)}")
+    
+    if region_gdf_filtered.empty:
+        print(f"No points found in {region_name}. Skipping.")
+        continue
+        
+    # Buffer the filtered points
+    buffered = region_gdf_filtered.geometry.buffer(buffer_distance)
+    covered_union = buffered.unary_union  # More efficient than union_all
+    
+    # Simplify the union for better display
+    if region_name == 'World':
+        covered_union = covered_union.simplify(0.001)
+    else:
+        covered_union = covered_union.simplify(10)
+    
+    # Calculate coverage
+    if region_name == 'World':
+        # For world, we'll just show the points without calculating coverage
+        percent = None
+    else:
+        region_area = region_gdf.geometry.area.iloc[0]
+        covered_area = covered_union.area
+        percent = (covered_area / region_area) * 100
+        print(f"Coverage Percentage: {percent:.4f}%")
+    
+    # Set up plot
+    fig, ax = plt.subplots(figsize=(10, 10))
+    
+    # Different plotting based on region
+    if region_name == 'World':
+        # For world, use a different approach
+        world.plot(ax=ax, color='lightgrey', edgecolor='black', linewidth=0.2)
+        gdf.plot(ax=ax, markersize=0.5, color='blue', alpha=0.5)
+        
+        # No buffer display for world (would be too cluttered)
+        plt.title("Global Running Activities", fontsize=16)
+        
+    else:
+        # Plot the region
+        region_gdf.plot(ax=ax, color='lightgrey', edgecolor='black')
+        
+        # Plot the coverage
+        gpd.GeoSeries([covered_union], crs=region_gdf.crs).plot(
+            ax=ax, color='red', alpha=0.3
+        )
+        
+        # Plot the filtered points
+        region_gdf_filtered.plot(ax=ax, markersize=1, color='blue')
+        
+        # Set the title and coverage text
+        plt.title(f"{region_name} Running Coverage", fontsize=16)
+        plt.text(0.05, 0.05, f"Coverage: {percent:.2f}%", transform=ax.transAxes,
+                 fontsize=12, bbox=dict(facecolor='white', alpha=0.7))
+        
+        # Zoom to the region extent
+        ax.set_xlim(region_gdf.total_bounds[0], region_gdf.total_bounds[2])
+        ax.set_ylim(region_gdf.total_bounds[1], region_gdf.total_bounds[3])
+    
     plt.axis('off')
     plt.tight_layout()
-    plt.savefig("uk_run_coverage.png", dpi=600, format='png')
+    
+    # Save as high-quality PNG
+    output_file = f"{region_name.lower()}_run_coverage.png"
+    plt.savefig(output_file, dpi=600, bbox_inches='tight')
+    print(f"Plot saved successfully as '{output_file}'.")
+    
+    plt.close()  # Close the figure to free memory
 
-    # Check if the image file is saved
-    if os.path.exists("uk_run_coverage.png"):
-        print("Plot saved successfully as 'uk_run_coverage.png'.")
-    else:
-        print("Failed to save the plot.")
-else:
-    print("GeoDataFrame is empty. No map was created.")
+print("\nAll regions processed successfully!")
