@@ -25,7 +25,7 @@ def get_region_gdf(region_name):
         sheffield_poly = gpd.GeoDataFrame(
             geometry=[sheffield_bbox], 
             crs="EPSG:4326"
-        ).to_crs(epsg=27700)
+        ).to_crs(epsg=3857)  # Web Mercator for basemap compatibility
         return sheffield_poly
     elif region_name == 'Buckinghamshire':
         # Create a proper polygon for Buckinghamshire
@@ -33,7 +33,7 @@ def get_region_gdf(region_name):
         bucks_poly = gpd.GeoDataFrame(
             geometry=[bucks_bbox], 
             crs="EPSG:4326"
-        ).to_crs(epsg=27700)
+        ).to_crs(epsg=3857)  # Web Mercator for basemap compatibility
         return bucks_poly
     elif region_name == 'World':
         # Simplify world geometry to improve performance
@@ -125,14 +125,18 @@ for region_name in regions:
     # Get the region geometry
     region_gdf = get_region_gdf(region_name)
     
-    # Reproject the region to match the GPS points CRS if needed
+    # Handle different projections
     if region_name == 'World':
         gdf_for_region = gdf.copy()  # Keep in WGS84 for world map
         buffer_distance = 0.02  # About 2km at equator
-    else:
-        # For UK and local regions, use British National Grid
+    elif region_name == 'UK':
+        # For UK, use British National Grid
         gdf_for_region = gdf.to_crs(epsg=27700)
-        buffer_distance = 100 if region_name == 'UK' else 50  # Meters
+        buffer_distance = 100  # Meters
+    else:
+        # For Sheffield and Buckinghamshire, use Web Mercator for basemap compatibility
+        gdf_for_region = gdf.to_crs(epsg=3857)
+        buffer_distance = 200  # Meters in Web Mercator
     
     # Filter points to only include those within the selected region
     if region_name == 'World':
@@ -174,7 +178,8 @@ for region_name in regions:
     if region_name == 'World':
         covered_union = covered_union.simplify(0.001)
     else:
-        covered_union = covered_union.simplify(10)
+        simplify_tolerance = 10 if region_name == 'UK' else 30
+        covered_union = covered_union.simplify(simplify_tolerance)
     
     # Calculate coverage
     if region_name == 'World':
@@ -196,28 +201,56 @@ for region_name in regions:
         gdf.plot(ax=ax, markersize=0.5, color='blue', alpha=0.5)
         
         # No buffer display for world (would be too cluttered)
-        plt.title("Global Running Activities", fontsize=16)
+        # plt.title("Global Running Activities", fontsize=16)
         
-    else:
-        # Plot the region
+    elif region_name == 'UK':
+        # Plot the UK
         region_gdf.plot(ax=ax, color='lightgrey', edgecolor='black')
         
         # Plot the coverage
         gpd.GeoSeries([covered_union], crs=region_gdf.crs).plot(
-            ax=ax, color='red', alpha=0.3
+            ax=ax, color='blue', alpha=0.3
         )
         
         # Plot the filtered points
         region_gdf_filtered.plot(ax=ax, markersize=1, color='blue')
         
         # Set the title and coverage text
-        plt.title(f"{region_name} Running Coverage", fontsize=16)
-        plt.text(0.05, 0.05, f"Coverage: {percent:.2f}%", transform=ax.transAxes,
-                 fontsize=12, bbox=dict(facecolor='white', alpha=0.7))
+        # plt.title(f"{region_name} Running Coverage", fontsize=16)
+        # if percent is not None:
+        #     plt.text(0.05, 0.05, f"Coverage: {percent:.2f}%", transform=ax.transAxes,
+        #             fontsize=12, bbox=dict(facecolor='white', alpha=0.7))
         
         # Zoom to the region extent
         ax.set_xlim(region_gdf.total_bounds[0], region_gdf.total_bounds[2])
         ax.set_ylim(region_gdf.total_bounds[1], region_gdf.total_bounds[3])
+    
+    else:  # Sheffield or Buckinghamshire
+        # For local regions, add a basemap
+        # Plot the coverage area first
+        coverage_gdf = gpd.GeoDataFrame(geometry=[covered_union], crs=region_gdf.crs)
+        # coverage_gdf.plot(ax=ax, color='blue', alpha=0.4)
+        
+        # Plot the points on top
+        region_gdf_filtered.plot(ax=ax, markersize=2, color='blue', alpha=0.7)
+        
+        # Add a basemap (OpenStreetMap)
+        ctx.add_basemap(
+            ax, 
+            source=ctx.providers.OpenStreetMap.Mapnik,
+            zoom=12 if region_name == 'Sheffield' else 10
+        )
+        
+        # Add title and coverage info
+        # plt.title(f"{region_name} Running Coverage", fontsize=16)
+        # if percent is not None:
+        #     plt.text(0.05, 0.05, f"Coverage: {percent:.2f}%", transform=ax.transAxes,
+        #             fontsize=12, bbox=dict(facecolor='white', alpha=0.7))
+        
+        # Zoom to the region extent with a small buffer
+        minx, miny, maxx, maxy = region_gdf.total_bounds
+        ax.set_xlim(minx, maxx)
+        ax.set_ylim(miny, maxy)
     
     plt.axis('off')
     plt.tight_layout()
