@@ -170,6 +170,71 @@ if 'Average Heart Rate' in df.columns:
     avg_heart_rate = df['Average Heart Rate'].mean()
     print(f"Average heart rate: {avg_heart_rate:.2f} bpm")
 
+# Calculate top speed
+if 'Max Speed' in df.columns:
+    df['Max Speed'] = pd.to_numeric(df['Max Speed'], errors='coerce')
+    top_speed = df['Max Speed'].max()
+    print(f"Top speed recorded: {top_speed:.2f} km/h")
+
+# Calculate longest break between runs
+running_df['Gap'] = running_df['Activity Date'].diff().dt.days
+longest_break = running_df['Gap'].max()
+if not running_df['Gap'].isna().all():
+    gap_position = running_df['Gap'].values.argmax()
+    date_before = running_df.iloc[gap_position - 1]['Activity Date']
+    date_after = running_df.iloc[gap_position]['Activity Date']
+    print(f"Longest break between runs: {longest_break} days (from {date_before.date()} to {date_after.date()})")
+
+# Shoe mileage and cost per km
+if 'Shoes' in df.columns:
+    df['Shoes'] = df['Shoes'].fillna('Unknown')
+    shoe_mileage = df.groupby('Shoes')['Distance'].sum()
+    print("\nShoe mileage:")
+    for shoe, dist in shoe_mileage.items():
+        print(f"{shoe}: {dist:.2f} km")
+
+    if 'Shoe Cost' in df.columns:
+        df['Shoe Cost'] = pd.to_numeric(df['Shoe Cost'], errors='coerce')
+        cost_per_km = df.groupby('Shoes').apply(lambda x: x['Shoe Cost'].iloc[0] / x['Distance'].sum() if x['Distance'].sum() > 0 else float('nan'))
+        print("\nCost per km per shoe:")
+        for shoe, cost in cost_per_km.items():
+            print(f"{shoe}: £{cost:.2f}")
+
+# Mood analysis
+mood_patterns = [
+    r'tired', r'great', r'hard', r'easy', r'sore',
+    r'fast', r'slow', r'happy', r'sad', r'strong',
+    r'yip+e+e*', r'yay+'
+]
+mood_counter = Counter()
+
+def normalise_mood_word(word):
+    if re.fullmatch(r'yip+e+e*', word):
+        return 'yippee'
+    elif re.fullmatch(r'yay+', word):
+        return 'yay'
+    return word
+
+if 'Activity Name' in df.columns:
+    text_data = df['Activity Name'].dropna().astype(str)
+    mood_counter.update(
+        normalise_mood_word(word)
+        for line in text_data for word in line.lower().split()
+        if any(re.fullmatch(pattern, word) for pattern in mood_patterns)
+    )
+
+if 'Activity Description' in df.columns:
+    text_data = df['Activity Description'].dropna().astype(str)
+    mood_counter.update(
+        normalise_mood_word(word)
+        for line in text_data for word in line.lower().split()
+        if any(re.fullmatch(pattern, word) for pattern in mood_patterns)
+    )
+
+print("\nMood word counts in activity titles/descriptions:")
+for word, count in mood_counter.most_common():
+    print(f"{word}: {count}")
+
 #output
 print(activity_counts)
 print(f"Most common day to run: {most_common_day}")
