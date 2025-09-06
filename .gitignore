@@ -17,7 +17,6 @@ outputs/
 #Ignore all user data 
 data/user_data/
 
-
 # Logs or temp files
 *.log
-
+*.fit
