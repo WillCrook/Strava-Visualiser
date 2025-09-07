@@ -5,6 +5,7 @@ import numpy as np
 import calendar
 from matplotlib.colors import LinearSegmentedColormap
 from pathlib import Path
+from datetime import timedelta
 
 def generate_activity_heatmap(input_file=None, output_dir=None):
     # Load and convert
@@ -13,150 +14,146 @@ def generate_activity_heatmap(input_file=None, output_dir=None):
         input_file = project_root / "data" / 'user_data' / 'Strava Data' / 'activities.csv'
     if output_dir is None:
         output_dir = project_root / "outputs"
-    
+
     output_dir.mkdir(exist_ok=True)
 
     df = pd.read_csv(input_file)
     df['Activity Date'] = pd.to_datetime(df['Activity Date'], format="%d %b %Y, %H:%M:%S")
     print(f"Total runs loaded: {len(df)}")
 
-    # Extract year, month, day, and weekday
+    # Extract year
     df['Year'] = df['Activity Date'].dt.year
-    df['Month'] = df['Activity Date'].dt.month
-    df['Day'] = df['Activity Date'].dt.day
-    df['Weekday'] = df['Activity Date'].dt.weekday  # Monday = 0, Sunday = 6
 
-    # Count activities by date
-    daily_counts = df.groupby(['Year', 'Month', 'Day']).size().reset_index(name='count')
-
-    # Create a date index for the entire year range in the data
-    start_date = df['Activity Date'].min()
-    end_date = df['Activity Date'].max()
-    date_range = pd.date_range(start=start_date, end=end_date)
-
-    # Create a DataFrame with all dates
-    all_dates = pd.DataFrame({
-        'Activity Date': date_range,
-        'Year': date_range.year,
-        'Month': date_range.month,
-        'Day': date_range.day,
-        'Weekday': date_range.weekday
-    })
-
-    # Merge with activity counts
-    merged_df = all_dates.merge(
-        daily_counts, 
-        on=['Year', 'Month', 'Day'], 
-        how='left'
-    ).fillna(0)
-
-    # Calculate coordinates for the heatmap cells
-    merged_df['week_number'] = merged_df['Activity Date'].dt.isocalendar().week
-    # Adjust for year wrapping (last week of previous year might be week 53)
-    merged_df['adjusted_week'] = merged_df.apply(
-        lambda x: x['week_number'] - min(merged_df[merged_df['Year'] == x['Year']]['week_number']) + 
-                (0 if x['Year'] == min(merged_df['Year']) else 
-                max(merged_df[merged_df['Year'] == min(merged_df['Year'])]['week_number'])), 
-        axis=1
-    )
-
-    # Create GitHub-like color scheme (light to dark green)
+    # GitHub-like color scheme
     github_colors = ['#ebedf0', '#9be9a8', '#40c463', '#30a14e', '#216e39']
     github_cmap = LinearSegmentedColormap.from_list('github', github_colors)
 
-    # Create a figure with GitHub-like style
-    fig, ax = plt.subplots(figsize=(16, 6), facecolor='white')
+    years = sorted(df['Year'].unique())
 
-    # Prepare the data matrix for plotting
-    max_week = merged_df['adjusted_week'].max() + 1
-    activity_matrix = np.zeros((7, max_week))  # 7 days, weeks calculated above
+    last_year_output = None
 
-    # Fill the matrix with activity counts
-    for _, row in merged_df.iterrows():
-        weekday = row['Weekday']
-        week = int(row['adjusted_week'])
-        count = row['count']
-        activity_matrix[weekday, week] = count
+    for year in years:
+        year_start = pd.Timestamp(year=year, month=1, day=1)
+        year_end = pd.Timestamp(year=year, month=12, day=31)
 
-    # Determine max count for color scaling (cap at 95th percentile to prevent outliers dominating)
-    vmax = np.percentile(activity_matrix[activity_matrix > 0], 95)
-    if vmax < 3:
-        vmax = 3  # Ensure we have at least 3 different color levels
+        # Build a continuous date index for the year
+        date_range = pd.date_range(start=year_start, end=year_end)
+        all_dates = pd.DataFrame({'Activity Date': date_range})
 
-    # Plot the heatmap
-    im = ax.imshow(activity_matrix, cmap=github_cmap, aspect='auto', 
-                interpolation='none', vmin=0, vmax=vmax)
+        # Count activities by exact date
+        daily_counts = (
+            df[df['Year'] == year]
+            .groupby(df['Activity Date'].dt.floor('D'))
+            .size()
+            .rename('count')
+            .reset_index()
+            .rename(columns={'Activity Date': 'Activity Date'})
+        )
 
-    # Set y-axis tick labels (days of week)
-    day_labels = ['Mon', 'Wed', 'Fri']
-    ax.set_yticks(np.arange(3))
-    ax.set_yticklabels(day_labels)
+        # Merge with all days, fill missing with 0
+        merged_df = all_dates.merge(daily_counts, on='Activity Date', how='left').fillna({'count': 0})
 
-    # Minimize padding
-    plt.tight_layout(pad=3)
+        # Compute Sunday-start weekday (Sun=0, Mon=1, ..., Sat=6)
+        weekday_mon0 = merged_df['Activity Date'].dt.weekday  # Mon=0..Sun=6
+        merged_df['weekday_sun0'] = (weekday_mon0 + 1) % 7
 
-    # Set x-axis tick labels (months)
-    months = []
-    month_positions = []
+        # Compute week index starting Sundays
+        jan1 = pd.Timestamp(year=year, month=1, day=1)
+        jan1_weekday_sun0 = (jan1.weekday() + 1) % 7
+        first_sunday = jan1 - pd.to_timedelta(jan1_weekday_sun0, unit='D')
 
-    for year in merged_df['Year'].unique():
-        year_data = merged_df[merged_df['Year'] == year]
-        for month in range(1, 13):
-            month_data = year_data[year_data['Month'] == month]
-            if not month_data.empty:
-                # Get the week number of the first day of the month
-                first_day = month_data.iloc[0]
-                month_positions.append(first_day['adjusted_week'])
-                months.append(calendar.month_abbr[month])
+        sundays = merged_df['Activity Date'] - pd.to_timedelta(merged_df['weekday_sun0'], unit='D')
+        merged_df['week_index'] = ((sundays - first_sunday).dt.days // 7).astype(int)
 
-    # Only show a subset of months to avoid crowding
-    if len(month_positions) > 12:
-        # Show every 2nd or 3rd month
-        step = len(month_positions) // 8
-        month_positions = month_positions[::step]
-        months = months[::step]
+        # Prepare the data matrix
+        max_week = merged_df['week_index'].max() + 1
+        activity_matrix = np.zeros((7, max_week))
 
-    ax.set_xticks(month_positions)
-    ax.set_xticklabels(months)
+        for _, row in merged_df.iterrows():
+            r = int(row['weekday_sun0'])
+            c = int(row['week_index'])
+            activity_matrix[r, c] = row['count']
 
-    # Remove spines
-    for spine in ax.spines.values():
-        spine.set_visible(False)
+        # Color scaling
+        positive = activity_matrix[activity_matrix > 0]
+        vmax = np.percentile(positive, 95) if positive.size else 3
+        if vmax < 3:
+            vmax = 3
 
-    # Add gridlines that match GitHub's style
-    ax.set_axisbelow(True)
-    ax.grid(False)
+        # Plot
+        fig, ax = plt.subplots(figsize=(16, 6), facecolor='white')
+        ax.imshow(activity_matrix, cmap=github_cmap, aspect='auto', interpolation='none', vmin=0, vmax=vmax)
 
-    # Add title in GitHub style
-    plt.title('Activity Contributions', fontsize=16, pad=20)
+        # Y-axis labels: show Mon/Wed/Fri only, with Sunday-start indexing
+        ax.set_yticks([1, 3, 5])
+        ax.set_yticklabels(['Mon', 'Wed', 'Fri'])
 
-    handles = []
-    labels = ['No activities', '1 activity', '2 activities', '3 activities', '4+ activities']
+        # X-axis month ticks for this year only
+        months = []
+        month_positions = []
+        for m in range(1, 13):
+            first_day = pd.Timestamp(year=year, month=m, day=1)
+            wd = (first_day.weekday() + 1) % 7
+            month_pos = int(((first_day - pd.to_timedelta(wd, unit='D')) - first_sunday).days // 7)
+            months.append(calendar.month_abbr[m])
+            month_positions.append(month_pos)
 
-    # Add an explanation text
-    legend_elements = [
-        plt.Rectangle((0, 0), 1, 1, facecolor=github_colors[0], edgecolor='none', label=labels[0]),
-        plt.Rectangle((0, 0), 1, 1, facecolor=github_colors[1], edgecolor='none', label=labels[1]),
-        plt.Rectangle((0, 0), 1, 1, facecolor=github_colors[2], edgecolor='none', label=labels[2]),
-        plt.Rectangle((0, 0), 1, 1, facecolor=github_colors[3], edgecolor='none', label=labels[3]),
-        plt.Rectangle((0, 0), 1, 1, facecolor=github_colors[4], edgecolor='none', label=labels[4])
-    ]
+        # Thin labels if crowded
+        if len(month_positions) > 12:
+            step = max(1, len(month_positions) // 12)
+            months = months[::step]
+            month_positions = month_positions[::step]
 
-    # Create a small additional axis for the legend
-    leg_ax = fig.add_axes([0.92, 0.15, 0.07, 0.7])
-    leg_ax.axis('off')
+        ax.set_xticks(month_positions)
+        ax.set_xticklabels(months)
 
-    # Add the legend to this axis
-    leg = leg_ax.legend(handles=legend_elements, title="Activity Level", loc='center left')
-    plt.setp(leg.get_title(), fontsize=12)
+        # Style
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+        ax.set_axisbelow(True)
+        ax.grid(False)
 
-    # Save as PNG with high DPI
-    output_file = output_dir / 'activity.png'
-    plt.savefig(output_file, dpi=300, bbox_inches='tight')
-    print(f"Saved activity plot to {output_file}")
+        plt.title(f'Activity Heat Map {year}', fontsize=16, pad=20)
 
-    # Display
-    plt.close()
+        # Legend
+        labels = ['No activities', '1 activity', '2 activities', '3 activities', '4+ activities']
+        legend_elements = [
+            plt.Rectangle((0, 0), 1, 1, facecolor=github_colors[0], edgecolor='none', label=labels[0]),
+            plt.Rectangle((0, 0), 1, 1, facecolor=github_colors[1], edgecolor='none', label=labels[1]),
+            plt.Rectangle((0, 0), 1, 1, facecolor=github_colors[2], edgecolor='none', label=labels[2]),
+            plt.Rectangle((0, 0), 1, 1, facecolor=github_colors[3], edgecolor='none', label=labels[3]),
+            plt.Rectangle((0, 0), 1, 1, facecolor=github_colors[4], edgecolor='none', label=labels[4])
+        ]
+        leg_ax = fig.add_axes([0.92, 0.15, 0.07, 0.7])
+        leg_ax.axis('off')
+        leg = leg_ax.legend(handles=legend_elements, title="Activity Level", loc='center left')
+        plt.setp(leg.get_title(), fontsize=12)
+
+        # Save per-year plot
+        output_file = output_dir / f'activity_{year}.png'
+        plt.savefig(output_file, dpi=300, bbox_inches='tight')
+        print(f"Saved activity plot to {output_file}")
+        last_year_output = output_file
+        plt.close()
+
+    # Also save the most recent year's chart as the default filename for convenience
+    if last_year_output is not None:
+        default_output = output_dir / 'activity.png'
+        try:
+            # Re-save or copy the last figure path as default by loading and saving through matplotlib is heavy.
+            # Simpler: create a symlink if possible, otherwise copy bytes.
+            import os
+            if default_output.exists():
+                default_output.unlink()
+            try:
+                os.symlink(last_year_output, default_output)
+            except Exception:
+                # Fallback: copy
+                with open(last_year_output, 'rb') as src, open(default_output, 'wb') as dst:
+                    dst.write(src.read())
+            print(f"Saved default activity plot to {default_output}")
+        except Exception as e:
+            print(f"Could not write default activity.png: {e}")
 
 if __name__ == "__main__":
     generate_activity_heatmap()
