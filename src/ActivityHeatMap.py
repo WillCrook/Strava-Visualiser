@@ -24,9 +24,9 @@ def generate_activity_heatmap(input_file=None, output_dir=None):
     # Extract year
     df['Year'] = df['Activity Date'].dt.year
 
-    # GitHub-like color scheme
-    github_colors = ['#ebedf0', '#9be9a8', '#40c463', '#30a14e', '#216e39']
-    github_cmap = LinearSegmentedColormap.from_list('github', github_colors)
+    # colour scheme
+    colours = ['#ebedf0', '#9be9a8', '#40c463', '#30a14e', '#216e39']
+    cmap = LinearSegmentedColormap.from_list('colours', colours)
 
     years = sorted(df['Year'].unique())
 
@@ -74,7 +74,7 @@ def generate_activity_heatmap(input_file=None, output_dir=None):
             c = int(row['week_index'])
             activity_matrix[r, c] = row['count']
 
-        # Color scaling
+        # colour scaling
         positive = activity_matrix[activity_matrix > 0]
         vmax = np.percentile(positive, 95) if positive.size else 3
         if vmax < 3:
@@ -82,7 +82,7 @@ def generate_activity_heatmap(input_file=None, output_dir=None):
 
         # Plot
         fig, ax = plt.subplots(figsize=(16, 6), facecolor='white')
-        ax.imshow(activity_matrix, cmap=github_cmap, aspect='auto', interpolation='none', vmin=0, vmax=vmax)
+        ax.imshow(activity_matrix, cmap=cmap, aspect='auto', interpolation='none', vmin=0, vmax=vmax)
 
         # Y-axis labels: show Mon/Wed/Fri only, with Sunday-start indexing
         ax.set_yticks([1, 3, 5])
@@ -118,11 +118,11 @@ def generate_activity_heatmap(input_file=None, output_dir=None):
         # Legend
         labels = ['No activities', '1 activity', '2 activities', '3 activities', '4+ activities']
         legend_elements = [
-            plt.Rectangle((0, 0), 1, 1, facecolor=github_colors[0], edgecolor='none', label=labels[0]),
-            plt.Rectangle((0, 0), 1, 1, facecolor=github_colors[1], edgecolor='none', label=labels[1]),
-            plt.Rectangle((0, 0), 1, 1, facecolor=github_colors[2], edgecolor='none', label=labels[2]),
-            plt.Rectangle((0, 0), 1, 1, facecolor=github_colors[3], edgecolor='none', label=labels[3]),
-            plt.Rectangle((0, 0), 1, 1, facecolor=github_colors[4], edgecolor='none', label=labels[4])
+            plt.Rectangle((0, 0), 1, 1, facecolor=colours[0], edgecolor='none', label=labels[0]),
+            plt.Rectangle((0, 0), 1, 1, facecolor=colours[1], edgecolor='none', label=labels[1]),
+            plt.Rectangle((0, 0), 1, 1, facecolor=colours[2], edgecolor='none', label=labels[2]),
+            plt.Rectangle((0, 0), 1, 1, facecolor=colours[3], edgecolor='none', label=labels[3]),
+            plt.Rectangle((0, 0), 1, 1, facecolor=colours[4], edgecolor='none', label=labels[4])
         ]
         leg_ax = fig.add_axes([0.92, 0.15, 0.07, 0.7])
         leg_ax.axis('off')
